@@ -1,0 +1,31 @@
+import type { NextConfig } from "next";
+
+const nextConfig: NextConfig = {
+  /* config options here */
+  webpack: (config) => {
+    config.resolve.fallback = { fs: false, net: false, tls: false }
+    config.externals.push('pino-pretty', 'lokijs', 'encoding')
+    return config
+  },
+  // Bundle the shared ESM packages, including their extensionless imports.
+  transpilePackages: [
+    '@layerswap/utils',
+    '@layerswap/wallet-core',
+    '@layerswap/ui-kit',
+    '@layerswap/widget-types',
+    '@layerswap/widget',
+    '@layerswap/wallet-evm',
+    '@layerswap/wallet-bitcoin',
+    '@layerswap/wallet-fuel',
+    '@layerswap/wallet-paradex',
+    '@layerswap/wallet-starknet',
+    '@layerswap/wallet-svm',
+    '@layerswap/wallet-ton',
+    '@layerswap/wallet-tron',
+    '@layerswap/wallet-imtbl-passport',
+    '@layerswap/wallet-module-loopring',
+    '@layerswap/wallets',
+  ],
+};
+
+export default nextConfig;

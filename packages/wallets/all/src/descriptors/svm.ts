@@ -1,0 +1,48 @@
+import KnownInternalNames from "@layerswap/utils/known-ids"
+import type { WalletProviderDescriptor } from "@layerswap/wallet-core/types"
+import type { WalletConnectConfig } from "@layerswap/wallet-evm"
+import { solanaWalletConnectChain } from '@layerswap/wallet-svm'
+import { defineWalletDescriptor, type DescriptorNetworkOptions } from "./defineWalletDescriptor"
+import { hasStorageKey } from "./persistedSession"
+
+// SVM's runtime list is built dynamically from `NetworkType.Solana` networks
+// in `SvmConnectionService` — for static gating we mirror the universe of
+// Solana network ids from utils. Extras don't hurt the
+// route filter (it intersects with the active networks list); missing entries
+// would.
+const SVM_NETWORKS = [
+    KnownInternalNames.Networks.SolanaMainnet,
+    KnownInternalNames.Networks.SolanaTestnet,
+    KnownInternalNames.Networks.SolanaDevnet,
+]
+
+/**
+ * Tree-shake-safe stand-in for `createSVMProvider`. Defers the eager portion
+ * of `@solana/web3.js` (~142 KB parsed) and `@walletconnect` adapters dragged
+ * by `SolanaWalletConnectAdapter` (~138 KB parsed) out of the host's entry
+ * chunk.
+ */
+export function createSVMDescriptor(walletConnectConfigs?: WalletConnectConfig, options?: DescriptorNetworkOptions): WalletProviderDescriptor {
+    const supportedNetworks = options?.supportedNetworks ?? SVM_NETWORKS
+    return defineWalletDescriptor({
+        id: 'solana',
+        name: 'Solana',
+        // Keep widget and wallet imports type-only to preserve lazy loading.
+        capabilities: {
+            walletConnectRegistry: {
+                networkTypes: [solanaWalletConnectChain.networkType],
+            },
+        },
+        autofillSupportedNetworks: supportedNetworks,
+        withdrawalSupportedNetworks: supportedNetworks,
+        asSourceSupportedNetworks: supportedNetworks,
+        // `STORAGE_KEY` in wallet-svm's svmAdapterManager — persisted only
+        // after a selection actually connected, so it's a reliable
+        // restorable-session hint.
+        hasPersistedSession: () => hasStorageKey('walletAdapterPreviouslySelectedName'),
+        loadProvider: async () => {
+            const mod = await import('@layerswap/wallet-svm')
+            return mod.createSVMProvider({ walletConnectConfigs })
+        },
+    })
+}

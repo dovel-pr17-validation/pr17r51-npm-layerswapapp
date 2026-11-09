@@ -1,0 +1,257 @@
+import { type InternalConnector, type Wallet } from '@layerswap/widget-types';
+import type { WalletConnectionProvider, WalletConnectionService } from "@layerswap/wallet-core/types";
+import type { WalletModalConnector } from "@layerswap/wallet-core/types"
+import { connectModalStore, type AppNetworkAdapter } from "@layerswap/wallet-core"
+import { resolveWalletIconString } from "@layerswap/wallet-core"
+import { isWalletInfoInjectable, isWalletInfoRemote, type Wallet as TonWallet, type WalletInfo, type WalletInfoRemote, } from '@tonconnect/sdk'
+import { Address } from '@ton/core'
+import { name as PROVIDER_NAME, id as PROVIDER_ID } from '../constants'
+import { getTonConnect } from './getTonConnect'
+import { snapshotFromTonWallet, type TonWalletSnapshot, useTonStore } from './tonStore'
+import { isTonWalletInstalled } from './isTonWalletInstalled'
+import { getTonConnectDeepLink } from './getTonConnectDeepLink'
+
+type RuntimeDeps = {
+    setSelectedConnector?: (connector: unknown) => void
+    isMobilePlatform?: boolean
+}
+
+export class TonConnectionService<Network> implements WalletConnectionService<RuntimeDeps, Network> {
+    private _networks: Network[] = []
+    private _networkAdapter: AppNetworkAdapter<Network> | undefined
+    private _networksKey = ''
+    private _deps: RuntimeDeps = {}
+
+    setNetworks(networks: Network[], networkAdapter: AppNetworkAdapter<Network>): void {
+        const key = networks.map(network => networkAdapter.getId(network)).join('|')
+        if (this._networksKey === key) return
+        this._networks = networks
+        this._networkAdapter = networkAdapter
+        this._networksKey = key
+    }
+
+    configure(deps: RuntimeDeps): void {
+        this._deps = { ...this._deps, ...deps }
+    }
+
+    getNetworkIcon(): string | undefined {
+        const network = this._networks.find(item => this._networkAdapter?.isTonNetwork(item))
+        return network && this._networkAdapter ? this._networkAdapter.getIcon(network) : undefined
+    }
+
+    private getSupportedNetworks(): string[] {
+        return this._networks
+            .filter(network => this._networkAdapter?.isTonNetwork(network))
+            .map(network => this._networkAdapter?.getId(network))
+            .filter((id): id is string => !!id)
+    }
+
+    getProviderIcon(): string | undefined {
+        return this.getNetworkIcon()
+    }
+
+    getAvailableConnectors(): InternalConnector[] {
+        const wallets = useTonStore.getState().wallets
+        return dedupeTonWallets(wallets).map(info => walletInfoToInternalConnector(info, wallets))
+    }
+
+    resolveWallet(snapshot: TonWalletSnapshot | undefined): Wallet | undefined {
+        if (!snapshot?.address) return undefined
+        let normalizedAddress: string
+        try {
+            normalizedAddress = Address.parse(snapshot.address).toString({ bounceable: false })
+        } catch (e) {
+            // A malformed address (corrupted state / unexpected connector response)
+            // must not crash the whole TON resolution flow — drop the wallet instead.
+            console.warn('[TON] Failed to parse wallet address:', snapshot.address, e)
+            return undefined
+        }
+        const wallets = useTonStore.getState().wallets
+        const identity = snapshot.appName?.toLowerCase()
+        const walletInfo = wallets.find(w => w.appName.toLowerCase() === identity) ?? wallets.find(w => w.name.toLowerCase() === identity)
+        const walletId = walletInfo?.name || snapshot.walletName || snapshot.appName
+        if (!walletId) return undefined
+
+        return {
+            id: walletId,
+            displayName: `${walletId} - Ton`,
+            addresses: [normalizedAddress],
+            address: normalizedAddress,
+            providerName: PROVIDER_NAME,
+            isActive: true,
+            icon: resolveWalletIconString({
+                id: walletInfo?.appName ?? snapshot.appName ?? walletId,
+                iconUrl: walletInfo?.imageUrl ?? snapshot.imageUrl,
+            }),
+            disconnect: () => this.disconnectWallets(),
+            withdrawalSupportedNetworks: this.getSupportedNetworks(),
+            autofillSupportedNetworks: this.getSupportedNetworks(),
+            asSourceSupportedNetworks: this.getSupportedNetworks(),
+            networkIcon: this.getNetworkIcon(),
+        }
+    }
+
+    getConnectedWallets(snapshot: TonWalletSnapshot | undefined): Wallet[] {
+        const wallet = this.resolveWallet(snapshot)
+        return wallet ? [wallet] : []
+    }
+
+    async disconnectWallets(): Promise<void> {
+        try {
+            const tonConnect = getTonConnect()
+            if (tonConnect.connected) {
+                await tonConnect.disconnect()
+            }
+        } catch (e) {
+            // Disconnect is best-effort — log but do not rethrow.
+            // The UI should treat the wallet as disconnected regardless.
+            const msg = e instanceof Error ? e.message : String(e)
+            console.error(`[TON] Failed to disconnect wallet: ${msg}`)
+        }
+    }
+
+    async connectWallet({ connector }: { connector: WalletModalConnector }): Promise<Wallet | undefined> {
+        const tonConnect = getTonConnect()
+        const setSelectedConnector = this._deps.setSelectedConnector
+        const isMobilePlatform = this._deps.isMobilePlatform ?? false
+
+        if (tonConnect.connected) {
+            await this.disconnectWallets()
+        }
+
+        const wallets = useTonStore.getState().wallets
+        const walletInfo = wallets.find(w => w.appName === connector.id)
+        if (!walletInfo) throw new Error('TON wallet not found')
+
+        // Set up the status-change promise first so we don't miss an instant
+        // injected connect that resolves before we set the listener.
+        const abortController = typeof AbortController !== 'undefined' ? new AbortController() : undefined
+        let unsubscribeStatus: (() => void) | undefined
+        let unsubscribeModal: (() => void) | undefined
+        const connectionResultPromise = new Promise<TonWallet>((resolve, reject) => {
+            unsubscribeStatus = tonConnect.onStatusChange(
+                (wallet) => {
+                    if (wallet) resolve(wallet)
+                },
+                reject,
+            )
+            unsubscribeModal = connectModalStore.subscribe(() => {
+                const modal = connectModalStore.getSnapshot()
+                if (!modal.isWalletModalOpen || modal.selectedConnector?.id !== connector.id) {
+                    abortController?.abort()
+                    reject(new Error('TON wallet connection cancelled'))
+                }
+            })
+        })
+
+        try {
+            if (isTonWalletInstalled(walletInfo, wallets)) {
+                tonConnect.connect({ jsBridgeKey: walletInfo.jsBridgeKey }, { signal: abortController?.signal })
+            } else if (isWalletInfoRemote(walletInfo)) {
+                const remote = walletInfo as WalletInfoRemote
+                const openDirectly = isMobilePlatform || (walletInfo.appName === 'telegram-wallet' && !connector.showQrCode)
+                setSelectedConnector?.({ ...connector, qr: openDirectly ? undefined : { state: 'loading', value: undefined }, showQrCode: !openDirectly })
+
+                const universalLink = tonConnect.connect({
+                    universalLink: remote.universalLink,
+                    bridgeUrl: remote.bridgeUrl,
+                }, { signal: abortController?.signal }) as string
+
+                const nativeDeepLink = getTonConnectDeepLink(universalLink, remote.deepLink)
+
+                if (openDirectly) {
+                    window.location.href = nativeDeepLink
+                } else {
+                    setSelectedConnector?.({ ...connector, qr: { state: 'fetched', value: universalLink, deepLink: nativeDeepLink }, showQrCode: true })
+                }
+            } else if (isWalletInfoInjectable(walletInfo)) {
+                // Injectable but not currently injected → tell the UI the extension is missing.
+                setSelectedConnector?.({ ...connector, extensionNotFound: true })
+                throw new Error(`${connector.name} extension is not installed`)
+            } else {
+                throw new Error('Unsupported TON wallet connection source')
+            }
+
+            const tonWallet = await connectionResultPromise
+            const snapshot = snapshotFromTonWallet(tonWallet)
+            return this.resolveWallet(snapshot)
+        } catch (e) {
+            if (e instanceof Error) throw e
+            throw new Error(String(e))
+        } finally {
+            unsubscribeStatus?.()
+            unsubscribeModal?.()
+        }
+    }
+
+    buildProvider(snapshot: TonWalletSnapshot | undefined): WalletConnectionProvider {
+        const connectedWallets = this.getConnectedWallets(snapshot)
+        const activeWallet = connectedWallets[0]
+        const ready = useTonStore.getState().ready
+
+        // While the wallet-list fetch is in flight (SSR + first client paint),
+        // expose empty supported-network lists so the widget's provider filter
+        // drops TON out of `isProvidersReady`. Once `ready` flips to true, the
+        // store emits and the snapshot recomputes with the real network list,
+        // exactly like the previous hook-bridge adapter behaved.
+        const supportedNetworks = ready ? this.getSupportedNetworks() : []
+
+        return {
+            connectWallet: this.connectWallet.bind(this),
+            disconnectWallets: this.disconnectWallets.bind(this),
+
+            availableConnectors: this.getAvailableConnectors(),
+            connectedWallets,
+            activeWallet,
+            withdrawalSupportedNetworks: supportedNetworks,
+            autofillSupportedNetworks: supportedNetworks,
+            asSourceSupportedNetworks: supportedNetworks,
+            name: PROVIDER_NAME,
+            id: PROVIDER_ID,
+            providerIcon: this.getProviderIcon(),
+            ready,
+        }
+    }
+}
+
+
+/**
+ * The TonConnect registry sometimes contains multiple entries that resolve to
+ * the same wallet — most notably OKX, which publishes both `okxWallet` and
+ * `okxTonWallet` with the same `jsBridgeKey: "okxTonWallet"`. Collapse to the
+ * first entry we encounter per jsBridgeKey so the user only sees one tile.
+ */
+function dedupeTonWallets(wallets: readonly WalletInfo[]): WalletInfo[] {
+    const seenBridgeKeys = new Set<string>()
+    const result: WalletInfo[] = []
+    for (const wallet of wallets) {
+        // The legacy Telegram connector is separate from Wallet in Telegram.
+        if (wallet.appName === 'telegram') continue
+        const key = isWalletInfoInjectable(wallet) ? wallet.jsBridgeKey : undefined
+        if (key) {
+            if (seenBridgeKeys.has(key)) continue
+            seenBridgeKeys.add(key)
+        }
+        result.push(wallet)
+    }
+    return result
+}
+
+function walletInfoToInternalConnector(info: WalletInfo, wallets: readonly WalletInfo[]): InternalConnector {
+    const isInjectable = isWalletInfoInjectable(info)
+    const isInjected = isTonWalletInstalled(info, wallets)
+    const hasBrowserExtension = isInjectable
+    const isMobileSupported = isWalletInfoRemote(info)
+
+    return {
+        id: info.appName,
+        name: info.name,
+        icon: info.imageUrl,
+        type: isInjected ? 'injected' : 'other',
+        hasBrowserExtension,
+        extensionNotFound: isInjectable && !isInjected,
+        isMobileSupported,
+        installUrl: info.aboutUrl,
+        providerName: PROVIDER_NAME,
+    }
+}

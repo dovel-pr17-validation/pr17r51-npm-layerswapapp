@@ -1,0 +1,34 @@
+import type { JSX } from 'react';
+
+export type ProgressStates = {
+    [key in Progress]?: {
+        [key in ProgressStatus]?: {
+            name?: string;
+            description?: JSX.Element | string | null | undefined;
+        };
+    };
+};
+export enum Progress {
+    InputTransfer = 'input_transfer',
+    Refuel = 'refuel',
+    OutputTransfer = 'output_transfer',
+    Refund = 'refund',
+}
+export enum ProgressStatus {
+    Upcoming = 'upcoming',
+    Current = 'current',
+    Complete = 'complete',
+    Failed = 'failed',
+    Delayed = 'delayed',
+    Removed = 'removed',
+}
+export type StatusStep = {
+    id: string;
+    name?: string;
+    status: ProgressStatus;
+    isLoading?: boolean;
+    description?: JSX.Element | string | null;
+    explorerUrl?: string;
+    readOnly?: boolean;
+    index?: number;
+};

@@ -1,0 +1,27 @@
+export type {
+    WalletConnectionStore,
+    WalletConnectionService,
+    WalletProviderStoreRegistry,
+    WalletProviderDescriptor,
+    WalletProviderCapabilities,
+    WalletConnectionProviderProps,
+    WalletConnectionProvider,
+    EnsureWalletChainOptions,
+    MultiStepHandler,
+    SelectAccountProps,
+    RequestAdditionalConnectorsParams,
+    RequestAdditionalConnectorsResult,
+} from "@/types/wallet";
+export { isWalletProviderDescriptor } from "@/types/wallet";
+
+export type {
+    WalletModalConnector,
+    WalletWrapperProps,
+    WalletInitContext,
+    WalletWrapper,
+    WalletProvider,
+    WalletProviderModule,
+    BaseWalletProviderConfig,
+} from "@/types/provider";
+export type { AppNetworkAdapter } from "@/types/network";
+export { defineNetworkAdapter } from "@/types/network";

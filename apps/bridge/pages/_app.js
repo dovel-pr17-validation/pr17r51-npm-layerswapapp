@@ -1,0 +1,77 @@
+import '../styles/globals.css'
+import '@layerswap/widget/index.css'
+import { useRouter } from "next/router";
+import { SWRConfig } from 'swr'
+import ProgressBar from "@badrap/bar-of-progress";
+import Router from "next/router";
+import { useEffect, useState } from 'react';
+import { SpeedInsights } from '@vercel/speed-insights/next';
+import { Analytics } from '@vercel/analytics/next';
+import { IntercomProvider } from 'react-use-intercom';
+import { setFaroView } from '../lib/faro';
+import FaroExperience from '../components/FaroExperience';
+
+const INTERCOM_APP_ID = 'h5zisg78'
+
+const progress = new ProgressBar({
+  size: 2,
+  color: "rgb(var(--ls-colors-primary))",
+  className: "bar-of-progress",
+  delay: 100,
+});
+
+Router.events.on("routeChangeStart", progress.start);
+Router.events.on("routeChangeComplete", progress.finish);
+Router.events.on("routeChangeError", progress.finish);
+
+function AppLayout({ children }) {
+  const router = useRouter()
+
+  // Use the route template (for example `/swap/[swapId]`) as the view name.
+  // This keeps the view dimension low-cardinality; Faro's separate page and
+  // navigation metadata still retain the complete URL and query string.
+  useEffect(() => {
+    setFaroView(router.pathname)
+  }, [router.pathname])
+
+  // Intercom needs a provider in scope for pages that render outside the
+  // widget surface (e.g. /404 uses `useIntercom()` directly). We keep the
+  // provider mounted but flip `shouldInitialize` only after the browser is
+  // idle so the third-party script (~342 KB) does not compete with the
+  // critical-path render. The widget's own LayerswapProvider applies the
+  // same gate independently for the in-widget tree.
+  const [intercomReady, setIntercomReady] = useState(false)
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const idle = window.requestIdleCallback ?? ((cb) => window.setTimeout(cb, 200))
+    const cancel = window.cancelIdleCallback ?? window.clearTimeout
+    const id = idle(() => setIntercomReady(true), { timeout: 6000 })
+    return () => cancel?.(id)
+  }, [])
+
+  return (
+    <>
+      <SWRConfig
+        value={{
+          revalidateOnFocus: false,
+          dedupingInterval: 5000,
+        }}
+      >
+        <IntercomProvider appId={INTERCOM_APP_ID} initializeDelay={2500} shouldInitialize={intercomReady}>
+          {children}
+        </IntercomProvider>
+      </SWRConfig>
+      <SpeedInsights />
+      <FaroExperience />
+      <Analytics />
+    </>)
+}
+
+function getDefaultLayout(page) {
+  return <AppLayout>{page}</AppLayout>
+}
+
+export default function App({ Component, pageProps, router }) {
+  const getLayout = Component.getLayout ?? getDefaultLayout
+  return getLayout(<Component key={router.asPath} {...pageProps} />)
+}

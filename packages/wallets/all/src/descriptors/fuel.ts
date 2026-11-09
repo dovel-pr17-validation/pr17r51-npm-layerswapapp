@@ -1,0 +1,34 @@
+import KnownInternalNames from "@layerswap/utils/known-ids"
+import type { WalletProviderDescriptor } from "@layerswap/wallet-core/types"
+import { defineWalletDescriptor, type DescriptorNetworkOptions } from "./defineWalletDescriptor"
+import { hasStorageKey } from "./persistedSession"
+
+const FUEL_NETWORKS = [
+    KnownInternalNames.Networks.FuelMainnet,
+    KnownInternalNames.Networks.FuelTestnet,
+    KnownInternalNames.Networks.FuelDevnet,
+]
+
+/**
+ * Tree-shake-safe stand-in for `createFuelProvider`. Defers `@fuel-ts/*` +
+ * `@fuels/vm-asm` — ~373 KB parsed / ~116 KB gzip — out of the host's entry
+ * chunk.
+ */
+export function createFuelDescriptor(options?: DescriptorNetworkOptions): WalletProviderDescriptor {
+    const supportedNetworks = options?.supportedNetworks ?? FUEL_NETWORKS
+    return defineWalletDescriptor({
+        id: 'fuel',
+        name: 'Fuel',
+        autofillSupportedNetworks: supportedNetworks,
+        withdrawalSupportedNetworks: supportedNetworks,
+        asSourceSupportedNetworks: supportedNetworks,
+        // `Fuel.STORAGE_KEY` in @fuel-ts/account — written once a fuel
+        // connector was detected as installed, so hydration only triggers
+        // for users who actually have a Fuel-family extension.
+        hasPersistedSession: () => hasStorageKey('fuel-current-connector'),
+        loadProvider: async () => {
+            const mod = await import('@layerswap/wallet-fuel')
+            return mod.createFuelProvider()
+        },
+    })
+}

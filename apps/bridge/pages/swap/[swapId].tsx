@@ -1,0 +1,108 @@
+import { InferGetServerSidePropsType } from 'next';
+import React, { useMemo } from 'react';
+import { getThemeData } from '../../helpers/settingsHelper';
+import { SwapWithdrawal, inflateSettings, encodeSettingsForSSR } from '@layerswap/widget';
+import { AppSettings, LayerswapApiClient, formatTokenAmount } from '@layerswap/widget/internal';
+import Layout from '../../components/layout';
+import { useRouter } from 'next/router';
+import { resolvePersistantQueryParams } from '../../helpers/querryHelper';
+import WidgetWrapper from '../../components/WidgetWrapper';
+import MaintananceContent from '../../components/maintanance/maintanance';
+import { resolveExtendedRouteFlags } from '../../flags';
+
+const SwapDetails = ({ settings, themeData, apiKey, swapData }: InferGetServerSidePropsType<typeof getServerSideProps>) => {
+  const router = useRouter()
+  const resolvedSettings = useMemo(() => inflateSettings(settings), [settings])
+
+  if (!resolvedSettings) return <MaintananceContent />
+  return (<>
+    <Layout themeData={themeData}>
+      <WidgetWrapper
+        settings={resolvedSettings}
+        themeData={themeData}
+        apiKey={apiKey}
+        configOverrides={{
+          initialValues: { swapId: router.query.swapId?.toString()! }
+        }}
+        callbacks={{
+          onBackClick() {
+            router.push({
+              pathname: "/",
+              query: { ...resolvePersistantQueryParams(router.query) }
+            })
+          }
+        }}
+      >
+        <SwapWithdrawal initialSwapData={swapData} />
+      </WidgetWrapper>
+    </Layout>
+  </>
+  )
+}
+
+export const getServerSideProps = async (ctx) => {
+  const params = ctx.params;
+  let isValidGuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(params.swapId);
+  if (!isValidGuid) {
+    return {
+      redirect: {
+        destination: '/',
+        permanent: false,
+      }
+    }
+  }
+  const app = ctx.query?.appName || ctx.query?.addressSource
+  const apiKey = JSON.parse(process.env.API_KEYS || "{ }")?.[app] || process.env.NEXT_PUBLIC_API_KEY
+  LayerswapApiClient.apiKey = apiKey
+  LayerswapApiClient.apiBaseEndpoint = process.env.NEXT_PUBLIC_LS_API || AppSettings.LayerswapApiUri
+  const apiClient = new LayerswapApiClient()
+
+  const [networkData, swapData] = await Promise.all([
+    apiClient.GetLSNetworksAsync().then(res => res.data).catch(error => {
+      console.error('[swap/[swapId]] Failed to fetch networks', error)
+      return undefined
+    }),
+    apiClient.GetSwapAsync(params.swapId).then(res => res.data).catch(error => {
+      console.error('[swap/[swapId]] Failed to fetch swap', error)
+      return undefined
+    }),
+  ])
+
+  if (swapData?.swap.transactions.length == 0) {
+    const redirectParams = new URLSearchParams({
+      from: swapData.swap.source_network.name,
+      to: swapData.swap.destination_network.name,
+      fromAsset: swapData.swap.source_token.symbol,
+      toAsset: swapData.swap.destination_token.symbol,
+      amount: formatTokenAmount(swapData.swap.requested_amount, swapData.swap.source_token.decimals),
+    })
+    const defaultTab = ctx.query?.defaultTab
+    if (typeof defaultTab === 'string' && defaultTab) {
+      redirectParams.set('defaultTab', defaultTab)
+    }
+    return {
+      redirect: {
+        destination: `/?${redirectParams.toString()}`,
+        permanent: true,
+      }
+    }
+  }
+
+  const settings = networkData ? {
+    networks: networkData,
+    featureFlags: await resolveExtendedRouteFlags(ctx.req),
+  } : null
+
+  const themeData = await getThemeData(ctx.query)
+
+  return {
+    props: {
+      settings: encodeSettingsForSSR(settings),
+      themeData,
+      apiKey,
+      swapData: swapData || null,
+    }
+  }
+}
+
+export default SwapDetails

@@ -1,0 +1,497 @@
+import type { AmountMode } from '@/lib/amountPresets';
+import { SwapStatus, type Refuel } from '@layerswap/widget-types';
+import AppSettings from "../AppSettings";
+import { InitializeUnauthInstance, InitializeAuthInstance } from "../axiosInterceptor"
+import { v4 as uuidv4 } from 'uuid';
+import { AxiosInstance, Method } from "axios";
+import { AuthRefreshFailedError } from "../Errors/AuthRefreshFailedError";
+import { type ApiResponse, EmptyApiResponse } from "@layerswap/widget-types";
+import { NetworkWithTokens, Network, Token } from "@layerswap/widget-types";
+import { Exchange } from "../../Models/Exchange";
+import { ErrorHandler } from "@/lib/ErrorHandler";
+import { startApiOperation } from '../widgetTelemetry';
+
+const IGNORED_API_ERROR_CODES = [
+    'ROUTE_NOT_FOUND_ERROR',
+    'PRICE_IMPACT_TOO_HIGH',
+    'GREATER_THAN_MAX_ERROR',
+    'LESS_THAN_MIN_ERROR'
+];
+
+export default class LayerSwapApiClient {
+    static apiBaseEndpoint?: string = AppSettings.LayerswapApiUri;
+    static apiKey: string = AppSettings.LayerswapApiKeys[AppSettings.ApiVersion || 'mainnet'];
+
+    _authInterceptor: AxiosInstance;
+    _unauthInterceptor: AxiosInstance
+    constructor() {
+        this._authInterceptor = InitializeAuthInstance();
+        this._unauthInterceptor = InitializeUnauthInstance(LayerSwapApiClient.apiBaseEndpoint)
+    }
+
+    fetcher = (url: string) => this.AuthenticatedRequest<ApiResponse<any>>("GET", url)
+
+    async GetRoutesAsync(direction: 'sources' | 'destinations', _useFrontendSwap: true = true): Promise<ApiResponse<NetworkWithTokens[]>> {
+        return await this.UnauthenticatedRequest<ApiResponse<NetworkWithTokens[]>>("GET", `/${direction}?include_unmatched=true&include_swaps=true&include_unavailable=true&use_frontend_swap=true`)
+    }
+
+    async GetSourceExchangesAsync(): Promise<ApiResponse<Exchange[]>> {
+        return await this.UnauthenticatedRequest<ApiResponse<Exchange[]>>("GET", `/source_exchanges`);
+    }
+
+    async GetLSNetworksAsync(): Promise<ApiResponse<NetworkWithTokens[]>> {
+        return await this.UnauthenticatedRequest<ApiResponse<NetworkWithTokens[]>>("GET", `/networks`);
+    }
+
+    async CreateSwapAsync(params: CreateSwapParams): Promise<ApiResponse<SwapResponse>> {
+        const correlationId = uuidv4()
+        return await this.AuthenticatedRequest<ApiResponse<SwapResponse>>("POST", `/swaps`, {
+            ...params,
+            use_frontend_swap: true,
+            use_gasless: params.use_gasless === true,
+        }, { 'X-LS-CORRELATION-ID': correlationId });
+    }
+
+    async GetTransactionStatus(network: string, tx_id: string): Promise<ApiResponse<any>> {
+        // 404 means the tx is not indexed yet. The rejection drives the caller's SWR error-retry polling.
+        return await this.UnauthenticatedRequest<ApiResponse<any>>("GET", `/transaction_status?network=${network}&transaction_id=${tx_id}`, undefined, undefined, { expectedStatuses: [404] });
+    }
+
+    async SwapCatchup(swapId: string, tx_id: string): Promise<ApiResponse<void>> {
+        return await this.AuthenticatedRequest<ApiResponse<void>>("POST", `/swaps/${swapId}/deposit_speedup`, { transaction_id: tx_id });
+    }
+
+    async AuthorizeSwapAsync(swapId: string, signature: string, signerAddress: string): Promise<ApiResponse<void>> {
+        return await this.AuthenticatedRequest<ApiResponse<void>>("POST", `/swaps/${swapId}/authorize`, { signature, signer_address: signerAddress });
+    }
+
+    async GetGaslessAuthorizationAsync(swapId: string): Promise<ApiResponse<GaslessAuthorizationResult>> {
+        return await this.AuthenticatedRequest<ApiResponse<GaslessAuthorizationResult>>("GET", `/swaps/${swapId}/authorize`);
+    }
+
+    async GetDepositActionsAsync(swapId: string, sourceAddress?: string): Promise<ApiResponse<DepositAction[]>> {
+        const query = sourceAddress ? `?source_address=${sourceAddress}` : "";
+        return await this.AuthenticatedRequest<ApiResponse<DepositAction[]>>("GET", `/swaps/${swapId}/deposit_actions${query}`);
+    }
+
+    async GetSwapAsync(swapId: string, sourceAddress?: string): Promise<ApiResponse<SwapResponse>> {
+        const query = sourceAddress ? `?source_address=${encodeURIComponent(sourceAddress)}` : "";
+        return await this.AuthenticatedRequest<ApiResponse<SwapResponse>>("GET", `/swaps/${swapId}${query}`);
+    }
+
+    private async AuthenticatedRequest<T extends EmptyApiResponse>(method: Method, endpoint: string, data?: any, header?: {}): Promise<T> {
+        const finishTelemetry = startApiOperation(method, endpoint)
+        let uri = LayerSwapApiClient.apiBaseEndpoint + "/api/v2" + endpoint;
+        return await this._authInterceptor(uri, { method: method, data: data, headers: { 'Access-Control-Allow-Origin': '*', ...(header ? header : {}) } })
+            .then(res => {
+                finishTelemetry(res?.data?.error ? 'failed' : 'succeeded', { http_status: res?.status }, res?.data?.data)
+                return res?.data;
+            })
+            .catch(async reason => {
+                finishTelemetry(reason?.code === 'ERR_CANCELED' ? 'cancelled' : 'failed', { http_status: reason?.response?.status })
+                if (reason instanceof AuthRefreshFailedError) {
+                    return Promise.resolve(new EmptyApiResponse());
+                }
+                else {
+                    reportApiError(endpoint, reason);
+                    return Promise.reject(reason);
+                }
+            });
+    }
+
+    private async UnauthenticatedRequest<T extends EmptyApiResponse>(method: Method, endpoint: string, data?: any, header?: {}, options?: RequestOptions): Promise<T> {
+        let uri = LayerSwapApiClient.apiBaseEndpoint + "/api/v2" + endpoint;
+        return await this._unauthInterceptor(uri, { method: method, data: data, headers: { 'Access-Control-Allow-Origin': '*', ...(header ? header : {}) } })
+            .then(res => {
+                return res?.data;
+            })
+            .catch(async reason => {
+                if (reason instanceof AuthRefreshFailedError) {
+                    return Promise.resolve(new EmptyApiResponse());
+                }
+                else {
+                    reportApiError(endpoint, reason, options);
+                    return Promise.reject(reason);
+                }
+            });
+    }
+}
+
+type RequestOptions = {
+    /** HTTP statuses that are a normal outcome for this endpoint: still rejected, never reported. */
+    expectedStatuses?: number[]
+}
+
+function reportApiError(endpoint: string, reason: any, options?: RequestOptions) {
+    if (options?.expectedStatuses?.includes(reason?.response?.status)) return;
+    const errorCode = reason?.response?.data?.error?.code;
+    if (IGNORED_API_ERROR_CODES.includes(errorCode)) return;
+
+    let error: Error;
+    if (reason instanceof Error) {
+        error = reason;
+    } else {
+        error = new Error(String(reason));
+        error.name = "APIError";
+    }
+    ErrorHandler({
+        type: 'APIError',
+        endpoint: endpoint,
+        status: reason?.response?.status,
+        statusText: reason?.response?.statusText,
+        responseData: reason?.response?.data,
+        requestUrl: reason?.request?.url,
+        requestMethod: reason?.request?.method,
+        message: error.message,
+        name: error.name,
+        stack: error.stack,
+        // Internal classification and recovery retain the original. The shared
+        // reporting boundary owns identity and conversion to a public summary.
+        cause: reason,
+    });
+}
+
+export type DepositAddress = {
+    type: string
+    address: `0x${string}`;
+}
+
+export enum DepositAddressSource {
+    UserGenerated = 0,
+    Managed = 1
+}
+
+export type CreateSwapParams = {
+    source_network: string,
+    source_token: string,
+    destination_network: string,
+    destination_token: string
+    refuel?: boolean,
+    slippage?: string,
+    destination_address: string,
+    source_address?: string
+    refund_address?: string
+    amount?: string,
+    reference_id?: string,
+    source_exchange?: string
+    destination_exchange?: string
+    use_deposit_address: boolean
+    use_depository?: boolean
+    use_gasless: boolean
+    use_frontend_swap: true
+    app_name?: string,
+}
+
+export type SwapResponse = {
+    deposit_actions?: DepositAction[];
+    swap: SwapItem;
+    quote: SwapQuote
+    refuel?: Refuel,
+}
+
+export type SwapBasicData = {
+    /** Local amount intent; never serialized as an API parameter. */
+    amountMode?: AmountMode
+    amountPresetSource?: string
+    amountPresetError?: string
+    amountPresetPending?: boolean
+    amountPresetBalance?: number
+    source_network: Network,
+    source_token: Token,
+    source_exchange?: Exchange,
+    destination_network: Network,
+    destination_token: Token,
+    destination_address: string,
+    requested_amount: string,
+    use_deposit_address: boolean
+}
+
+export type SwapDetails = {
+    id: string,
+    created_date: string,
+    source_address?: string,
+    status: SwapStatus,
+    transactions: Transaction[]
+    exchange_account_connected: boolean;
+    exchange_account_name?: string;
+
+    fail_reason?: string;
+    metadata: {
+        reference_id: string | null;
+        app: string | null;
+        sequence_number: number
+    }
+}
+
+export type SwapItem = {
+    id: string,
+    created_date: string,
+
+    source_network: Network,
+    source_token: Token,
+    source_exchange?: Exchange,
+    destination_network: Network,
+    destination_token: Token,
+    destination_address: string,
+    source_address?: string,
+    requested_amount: number,
+    use_deposit_address: boolean
+
+
+    status: SwapStatus,
+    transactions: Transaction[]
+    exchange_account_connected: boolean;
+    exchange_account_name?: string;
+
+    fail_reason?: string;
+    metadata: {
+        reference_id: string | null;
+        app: string | null;
+        sequence_number: number
+    },
+
+    destination_exchange?: Exchange,
+}
+
+export type EIP712TypedData = {
+    types: Record<string, { name: string, type: string }[]>,
+    primaryType: string,
+    domain: Record<string, string | number>,
+    message: Record<string, string | number>,
+}
+
+export type DepositActionStep = 'approve_permit2' | 'sign' | 'publish' | 'deposit' | string
+export type DepositActionStatus = 'action_required' | 'pending' | 'waiting' | 'completed' | 'failed' | string
+
+type DepositActionWorkflow = {
+    step?: DepositActionStep,
+    status?: DepositActionStatus,
+    signing_standard?: string,
+    expires_at?: string,
+    detail?: string,
+}
+
+type DepositActionBase = DepositActionWorkflow & {
+    amount?: number,
+    amount_in_base_units?: string,
+    call_data?: `0x${string}` | string | null,
+    gas_limit?: string,
+    encoded_args?: string[] | null,
+    from_address?: string,
+    fee?: any | null,//TODO: clarify this field type
+    network?: Network,
+    order?: number,
+    to_address?: string,
+    token?: Token,
+    fee_token?: Token,
+}
+
+export type TransferDepositAction = DepositActionBase & {
+    type: 'transfer' | 'manual_transfer',
+}
+
+export type SignDepositAction = DepositActionBase & {
+    type: 'sign',
+    typed_data: EIP712TypedData,
+    valid_after?: number,
+    valid_before?: number,
+    nonce?: string,
+}
+
+export type PendingDepositAction = Partial<DepositActionBase> & {
+    type?: undefined,
+}
+
+export type DepositAction = TransferDepositAction | SignDepositAction | PendingDepositAction
+
+export type Quote = {
+    quote: SwapQuote,
+    refuel?: Refuel,
+    reward?: QuoteReward
+}
+
+export type QuoteReward = {
+    amount: number,
+    amount_in_usd: number,
+    token: Token,
+    network: Network,
+    campaign_type: "for_nft_holders" | "default";
+    nft_contract_address?: string;
+}
+
+export type GetQuoteParams = {
+    source_network: string,
+    source_token: string,
+    source_address?: string,
+    destination_network: string,
+    destination_token: string,
+    destination_address: string,
+    use_deposit_address: boolean,
+    use_frontend_swap: true,
+    include_gas?: boolean,
+    amount: number,
+    refuel?: boolean
+}
+
+export type SwapQuote = {
+    source_network?: Network,
+    source_token?: Token,
+    destination_network?: Network,
+    destination_token?: Token,
+    requested_amount?: number
+    receive_amount: number,
+    min_receive_amount: number,
+    fee_discount?: number
+    total_fee: number,
+    total_fee_in_usd: number,
+    blockchain_fee: number,
+    service_fee: number,
+    avg_completion_time: string,
+    refuel_in_source?: number,
+    slippage?: number,
+    rate?: number,
+}
+
+export type Transaction = {
+    type: TransactionType,
+    from: string,
+    to: string,
+    created_date: string,
+    amount: number,
+    transaction_hash: string,
+    confirmations: number,
+    max_confirmations: number,
+    usd_value: number,
+    usd_price: number,
+    status: BackendTransactionStatus,
+    fee_amount?: number | null,
+    fee_token?: Token,
+    timestamp?: string,
+}
+
+export enum TransactionType {
+    Input = 'input',
+    Output = 'output',
+    Refuel = 'refuel',
+    Refund = 'refund'
+}
+
+export enum BackendTransactionStatus {
+    Completed = 'completed',
+    Failed = 'failed',
+    Initiated = 'initiated',
+    Pending = 'pending'
+}
+
+export enum TransactionStatus {
+    Completed = 'completed',
+    Failed = 'failed',
+    Pending = 'pending'
+}
+
+export enum DepositType {
+    Manual = 'manual',
+    Wallet = 'wallet'
+}
+
+// Gasless deposit (paymaster) authorization lifecycle, polled via GET /swaps/{id}/authorize.
+// initiated → accepted, awaiting broadcast; published → on-chain (transaction present);
+// completed → deposit done; expired | insufficient | rejected → terminal failure.
+export type GaslessAuthorizationStatus =
+    | 'initiated'
+    | 'published'
+    | 'completed'
+    | 'expired'
+    | 'insufficient'
+    | 'rejected'
+
+export type GaslessAuthorizationTransaction = {
+    transaction_hash: string
+    status: BackendTransactionStatus | string
+    confirmations: number
+    max_confirmations: number
+}
+
+export type GaslessAuthorizationResult = {
+    status: GaslessAuthorizationStatus
+    transaction?: GaslessAuthorizationTransaction | null
+}
+
+export type Fee = {
+    min_amount: number,
+    max_amount: number,
+    fee_amount: number,
+    deposit_type: DepositType
+}
+
+export type PublishedSwapTransactions = {
+    state: {
+        swapTransactions: {
+            [key: string]: SwapTransaction
+        }
+    }
+}
+
+
+export type SwapTransaction = {
+    hash: string,
+    status: BackendTransactionStatus
+}
+
+export enum SwapType {
+    OnRamp = "cex_to_network",
+    OffRamp = "network_to_cex",
+    CrossChain = "network_to_network"
+}
+
+export enum WithdrawType {
+    Wallet = 'wallet',
+    Manually = 'manually',
+    Stripe = 'stripe',
+    Coinbase = 'coinbase',
+    External = 'external'
+}
+
+export type Campaign = {
+    id: number,
+    name: string,
+    display_name: string,
+    description: string | null,
+    logo_url: string | null,
+    token: Token,
+    network: Network,
+    percentage: number,
+    start_date: string,
+    end_date: string,
+    min_payout_amount: number,
+    max_payout_amount: number,
+    total_budget: number,
+    distributed_amount: number,
+    reward_limit_period: number,
+}
+
+export type Reward = {
+    user_reward: {
+        period_pending_amount: number,
+        total_amount: number,
+        total_amount_in_usd: number
+        total_pending_amount: number,
+        position: number
+    },
+    next_airdrop_date: string | Date,
+}
+
+export type Leaderboard = {
+    leaderboard: {
+        address: string,
+        amount: number,
+        position: number
+    }[],
+    leaderboard_budget: number
+}
+
+export type RewardPayout = {
+    date: string,
+    transaction_id: string,
+    amount: number
+}

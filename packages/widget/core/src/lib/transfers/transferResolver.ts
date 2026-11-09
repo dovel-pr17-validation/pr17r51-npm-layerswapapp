@@ -1,0 +1,21 @@
+import { type Wallet } from '@layerswap/widget-types';
+import { TransferProvider, TransferProps, TransferProgress } from "@layerswap/widget-types";
+
+export class TransferResolver {
+    private providers: TransferProvider[]
+
+    constructor(providers?: TransferProvider[]) {
+        this.providers = providers || []
+    }
+
+    async executeTransfer(params: TransferProps, wallet?: Wallet, onProgress?: (info: TransferProgress | undefined) => void): Promise<string | undefined> {
+        const provider = this.providers.find(p => p.supportsNetwork(params.network))
+        if (!provider) {
+            const error = `No transfer provider found for network: ${params.network.name}`
+            console.warn(error)
+            throw error
+        }
+
+        return provider.executeTransfer(params, wallet, onProgress)
+    }
+}

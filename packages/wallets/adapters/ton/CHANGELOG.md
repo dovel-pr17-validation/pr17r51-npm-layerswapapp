@@ -1,0 +1,203 @@
+# @layerswap/wallet-ton
+
+## 2.5.1
+
+### Patch Changes
+
+- - Add frontend swap workflows and live Min, 50%, and Max amount presets.
+  - Improve swap progress, previews, slow-route warnings, and amount validation.
+  - Fix retry handling, Hyperliquid withdrawal precision, TON wallet connections, and Pocket Universe compatibility.
+  - Improve transaction summaries and balance diagnostics.
+- Updated dependencies [2463dd2]
+- Updated dependencies
+- Updated dependencies [a9c35f8]
+- Updated dependencies [419387b]
+- Updated dependencies [34da257]
+- Updated dependencies [a2136b6]
+- Updated dependencies [78fa843]
+- Updated dependencies [a2136b6]
+  - @layerswap/widget-types@2.5.1
+  - @layerswap/wallet-core@2.5.1
+  - @layerswap/utils@2.5.1
+
+## 2.4.0
+
+### Patch Changes
+
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @layerswap/widget-types@2.4.0
+  - @layerswap/wallet-core@2.4.0
+  - @layerswap/utils@2.4.0
+
+## 2.3.1
+
+### Patch Changes
+
+- @layerswap/wallet-core@2.3.1
+- @layerswap/utils@2.3.1
+
+## 2.3.0
+
+### Patch Changes
+
+- dc962d6: Transfer providers declare why a transfer failed instead of relying on the rejected UI label.
+  - Every thrown transfer error is built with `walletActionError` / `userRejectedError` from `@layerswap/wallet-core/errors`: it keeps its `ActionMessageType` name for the UI, carries the original error as `cause`, always has a string `message`, and declares `reasonCode: 'user_rejected'` only for a wallet decline. The mapping lives in a pure `transferProvider/toTransferError` module per adapter, covered by `tests/transfer-errors.test.mjs`.
+  - Starknet: `message` is a string again (it used to be the raw error object). `USER_REFUSED_OP` is a declared decline; `Execute failed` keeps the rejected copy but carries no reason code and is reported to the host as a failure until its wallet-side origin is verified.
+  - Paradex: the `'reject'` substring heuristic is gone; only structured declines from the backing EVM/Starknet wallet (4001, viem `UserRejectedRequestError`, `USER_REFUSED_OP`) count as rejections, so sequencer/gateway rejections are failures.
+  - Stellar: the decline vocabulary (`declin|cancel|closed`) applies only to the wallet prompt (`signTransaction`); account load, fee, simulation, validation and Horizon submission failures containing those words are failures (`UnexpectedErrorMessage` / `TransactionFailed` / `InsufficientFunds`).
+  - Fuel, TON, TRON, Bitcoin, Solana: conditions unchanged; declines are declared explicitly and other failures keep their labels.
+
+- f26c1e7: Wallet declines are reported as declines, and node errors no longer pass for declines.
+  - `@layerswap/wallet-core/errors` exports `errorMessage(error)`: an Error's message, a string as is, or a plain `{ message }` object's string message, else `String(error)`. Every adapter's `toTransferError` uses it, so plain-object wallet rejections keep their text instead of `[object Object]`.
+  - Classifier: decline text must name the user (`user rejected`, `user denied`, `denied by the user`, …); the generic `rejected the request` phrase is gone, so a node's `origin rejected the request` is no longer `user_rejected`. A revert reason (`execution reverted: …`) never counts as a decline, and on a JSON-RPC server error (`-32000`..`-32099`) the text must start with `user rejected` / `user denied` — WalletConnect wallets that decline with `-32000 "User rejected the request."` stay `user_rejected`. Definitive codes (4001, 5000, `ACTION_REJECTED`, `UserRejectedRequestError`) are unchanged.
+  - EVM: `resolveError` checks decline evidence before the nested `-32000` insufficient-funds branch, so a decline relayed as `-32000` is no longer shown as insufficient funds.
+  - Starknet: a plain `{ code: 113, message: 'An error occurred (USER_REFUSED_OP)' }` rejection is a declared decline carrying its real message.
+  - Stellar: the signing-prompt vocabulary includes `reject` again, so Albedo's `Action request was rejected by the user.` is a decline.
+  - TON: TON Connect's `UserRejectsError` is a declared decline (with a name/message fallback for a duplicate SDK copy); the `Reject request` string is still recognised.
+
+- Updated dependencies [95d95a1]
+- Updated dependencies [31d0d1f]
+- Updated dependencies [5bd03c7]
+- Updated dependencies [bdf46a0]
+- Updated dependencies [f26c1e7]
+- Updated dependencies [bdf46a0]
+  - @layerswap/widget-types@2.3.0
+  - @layerswap/wallet-core@2.3.0
+  - @layerswap/utils@2.3.0
+
+## 2.2.0
+
+### Minor Changes
+
+- Global improvements and bug fixes
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/utils@2.2.0
+  - @layerswap/wallet-core@2.2.0
+  - @layerswap/widget-types@2.2.0
+
+## 2.1.0
+
+### Minor Changes
+
+- Global fixes and improvements
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/utils@2.1.0
+  - @layerswap/wallet-core@2.1.0
+  - @layerswap/widget-types@2.1.0
+
+## 2.0.1
+
+### Patch Changes
+
+- Wallet connection readiness fixes
+- Updated dependencies
+  - @layerswap/utils@2.0.1
+  - @layerswap/wallet-core@2.0.1
+  - @layerswap/widget-types@1.0.1
+
+## 2.0.0
+
+### Major Changes
+
+- 3e34e07: Wallets 2.0 — the wallet stack is re-architected into a layered package family with lazy chain loading.
+
+  **Breaking changes**
+  - New `@layerswap/wallet-core` package: the headless foundation (wallet contracts — `WalletProvider`, `WalletWrapper`, `WalletProviderDescriptor`, the shared connection-service contract — plus the provider registry and WalletConnect plumbing), extracted from the widget. New `@layerswap/ui-kit` package: the presentational connect modal and connectors list. Chain packages depend only on wallet-core, `@layerswap/utils`, and `@layerswap/widget-types`.
+  - `getDefaultProviders()` now returns lazy `WalletProviderDescriptor`s for every chain except EVM. Chain SDKs (`starknet`, `@paradex/sdk`, `@ton/*`, `@fuel-ts/*`, `@solana/web3.js`, `tronweb`, `bitcoinjs-lib`, `@bigmi`) are dynamic-imported when the connect modal opens instead of shipping in the host's entry bundle. Persisted sessions still hydrate their provider eagerly on startup.
+  - Root exports of `@layerswap/wallets` changed accordingly: non-EVM chains now export `create<Chain>Descriptor` instead of `create<Chain>Provider`. Eager factories remain available from each `@layerswap/wallet-<chain>` package; the eager Immutable Passport factory moved to the `@layerswap/wallets/eager/imtbl-passport` subpath.
+  - The hook-based `WalletProvider` contract was replaced with vanilla store factories (`useChainConfigs` is no longer exported from the root).
+  - Wallet provider ids are unified into the compile-time-enforced `WalletProviderId` union in `@layerswap/widget-types` (note: Solana's id is `'solana'`, not `'svm'`).
+  - The per-provider `registryWallets` array was removed. WalletConnect Explorer metadata is flattened onto each connector (`source: 'registry'`, `networkTypes`, `mobile`); use `isWalletConnectRegistryConnector()` from `@layerswap/wallet-core` to identify registry connectors.
+  - Bitcoin: the Phantom connector was removed (dropped upstream by `@bigmi/client` v0.9).
+
+  **New**
+  - EVM: injected wallets are discovered via EIP-6963 multi-injected provider discovery (replacing the bare injected connector), and an externally-provided wagmi `Config` can be adopted via `createEVMProvider({ wagmiConfig })` so the widget shares the host app's EVM state.
+  - Solana: Token-2022 balances and withdrawals; live Wallet Standard discovery with multichain detection.
+  - Bitcoin: added Ctrl, OKX, Bitget, and MetaMask connectors (joining Xverse, UniSat, Leather, OneKey); updated PSBT finalization.
+  - Tron: Trust Wallet adapter; adapters are resolved by connector id instead of display name.
+  - TON: mobile bridge transfers open the wallet app.
+
+  **Fixed**
+  - Starknet: real extension availability detection and session restore after refresh.
+  - Fuel: reliable extension detection and session restore.
+  - Paradex: wallet restored after a page refresh; hidden from the connect list until hydrated.
+  - Bitcoin: MetaMask auto-reconnect popup and stuck connect button; wallet icon/name after reload; hardened disconnect.
+  - Solana: the WalletConnect modal no longer opens unprompted on load.
+  - Raw inline-SVG wallet icons are normalized, and the shared RPC-health store stays alive across consumer unmounts.
+
+### Patch Changes
+
+- Updated dependencies [3e34e07]
+- Updated dependencies [3e34e07]
+- Updated dependencies [3e34e07]
+  - @layerswap/utils@2.0.0
+  - @layerswap/wallet-core@2.0.0
+  - @layerswap/widget-types@1.0.0
+
+## 1.7.0
+
+### Minor Changes
+
+- Add Polymarket withdrawal
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/widget@1.7.0
+
+## 1.6.0
+
+### Minor Changes
+
+- Added gasless transactions
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/widget@1.6.0
+
+## 1.5.0
+
+### Minor Changes
+
+- Add Deposit from Hyperliquid option
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/widget@1.5.0
+
+## 1.4.0
+
+### Minor Changes
+
+- Add Deposit widget
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/widget@1.4.0
+
+## 1.2.1
+
+### Patch Changes
+
+- Minor bug fixes and improvements
+- Updated dependencies
+  - @layerswap/widget@1.2.2
+
+## 1.2.0
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/widget@1.2.0

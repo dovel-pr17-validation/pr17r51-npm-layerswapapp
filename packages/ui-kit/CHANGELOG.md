@@ -1,0 +1,133 @@
+# @layerswap/ui-kit
+
+## 2.5.1
+
+### Minor Changes
+
+- - Add frontend swap workflows and live Min, 50%, and Max amount presets.
+  - Improve swap progress, previews, slow-route warnings, and amount validation.
+  - Fix retry handling, Hyperliquid withdrawal precision, TON wallet connections, and Pocket Universe compatibility.
+  - Improve transaction summaries and balance diagnostics.
+
+### Patch Changes
+
+- Updated dependencies [2463dd2]
+- Updated dependencies
+- Updated dependencies [a9c35f8]
+- Updated dependencies [419387b]
+- Updated dependencies [34da257]
+- Updated dependencies [a2136b6]
+- Updated dependencies [78fa843]
+- Updated dependencies [a2136b6]
+  - @layerswap/widget-types@2.5.1
+  - @layerswap/wallet-core@2.5.1
+  - @layerswap/utils@2.5.1
+
+## 2.4.0
+
+### Patch Changes
+
+- Fix the backdrop flash after wallet drawer exit animations by pinning Framer Motion to `12.34.5` in the UI kit and widget.
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+- Updated dependencies
+  - @layerswap/widget-types@2.4.0
+  - @layerswap/wallet-core@2.4.0
+  - @layerswap/utils@2.4.0
+
+## 2.3.1
+
+### Patch Changes
+
+- @layerswap/wallet-core@2.3.1
+- @layerswap/utils@2.3.1
+
+## 2.3.0
+
+### Patch Changes
+
+- Updated dependencies [95d95a1]
+- Updated dependencies [31d0d1f]
+- Updated dependencies [5bd03c7]
+- Updated dependencies [bdf46a0]
+- Updated dependencies [f26c1e7]
+- Updated dependencies [bdf46a0]
+  - @layerswap/widget-types@2.3.0
+  - @layerswap/wallet-core@2.3.0
+  - @layerswap/utils@2.3.0
+
+## 2.2.0
+
+### Minor Changes
+
+- Global improvements and bug fixes
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/utils@2.2.0
+  - @layerswap/wallet-core@2.2.0
+  - @layerswap/widget-types@2.2.0
+
+## 2.1.0
+
+### Minor Changes
+
+- Global fixes and improvements
+
+### Patch Changes
+
+- Updated dependencies
+  - @layerswap/utils@2.1.0
+  - @layerswap/wallet-core@2.1.0
+  - @layerswap/widget-types@2.1.0
+
+## 2.0.1
+
+### Patch Changes
+
+- Wallet connection readiness fixes
+- Updated dependencies
+  - @layerswap/utils@2.0.1
+  - @layerswap/wallet-core@2.0.1
+  - @layerswap/widget-types@1.0.1
+
+## 2.0.0
+
+### Major Changes
+
+- 3e34e07: Wallets 2.0 — the wallet stack is re-architected into a layered package family with lazy chain loading.
+
+  **Breaking changes**
+  - New `@layerswap/wallet-core` package: the headless foundation (wallet contracts — `WalletProvider`, `WalletWrapper`, `WalletProviderDescriptor`, the shared connection-service contract — plus the provider registry and WalletConnect plumbing), extracted from the widget. New `@layerswap/ui-kit` package: the presentational connect modal and connectors list. Chain packages depend only on wallet-core, `@layerswap/utils`, and `@layerswap/widget-types`.
+  - `getDefaultProviders()` now returns lazy `WalletProviderDescriptor`s for every chain except EVM. Chain SDKs (`starknet`, `@paradex/sdk`, `@ton/*`, `@fuel-ts/*`, `@solana/web3.js`, `tronweb`, `bitcoinjs-lib`, `@bigmi`) are dynamic-imported when the connect modal opens instead of shipping in the host's entry bundle. Persisted sessions still hydrate their provider eagerly on startup.
+  - Root exports of `@layerswap/wallets` changed accordingly: non-EVM chains now export `create<Chain>Descriptor` instead of `create<Chain>Provider`. Eager factories remain available from each `@layerswap/wallet-<chain>` package; the eager Immutable Passport factory moved to the `@layerswap/wallets/eager/imtbl-passport` subpath.
+  - The hook-based `WalletProvider` contract was replaced with vanilla store factories (`useChainConfigs` is no longer exported from the root).
+  - Wallet provider ids are unified into the compile-time-enforced `WalletProviderId` union in `@layerswap/widget-types` (note: Solana's id is `'solana'`, not `'svm'`).
+  - The per-provider `registryWallets` array was removed. WalletConnect Explorer metadata is flattened onto each connector (`source: 'registry'`, `networkTypes`, `mobile`); use `isWalletConnectRegistryConnector()` from `@layerswap/wallet-core` to identify registry connectors.
+  - Bitcoin: the Phantom connector was removed (dropped upstream by `@bigmi/client` v0.9).
+
+  **New**
+  - EVM: injected wallets are discovered via EIP-6963 multi-injected provider discovery (replacing the bare injected connector), and an externally-provided wagmi `Config` can be adopted via `createEVMProvider({ wagmiConfig })` so the widget shares the host app's EVM state.
+  - Solana: Token-2022 balances and withdrawals; live Wallet Standard discovery with multichain detection.
+  - Bitcoin: added Ctrl, OKX, Bitget, and MetaMask connectors (joining Xverse, UniSat, Leather, OneKey); updated PSBT finalization.
+  - Tron: Trust Wallet adapter; adapters are resolved by connector id instead of display name.
+  - TON: mobile bridge transfers open the wallet app.
+
+  **Fixed**
+  - Starknet: real extension availability detection and session restore after refresh.
+  - Fuel: reliable extension detection and session restore.
+  - Paradex: wallet restored after a page refresh; hidden from the connect list until hydrated.
+  - Bitcoin: MetaMask auto-reconnect popup and stuck connect button; wallet icon/name after reload; hardened disconnect.
+  - Solana: the WalletConnect modal no longer opens unprompted on load.
+  - Raw inline-SVG wallet icons are normalized, and the shared RPC-health store stays alive across consumer unmounts.
+
+### Patch Changes
+
+- Updated dependencies [3e34e07]
+- Updated dependencies [3e34e07]
+- Updated dependencies [3e34e07]
+  - @layerswap/utils@2.0.0
+  - @layerswap/wallet-core@2.0.0
+  - @layerswap/widget-types@1.0.0

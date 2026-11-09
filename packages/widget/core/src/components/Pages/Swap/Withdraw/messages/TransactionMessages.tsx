@@ -1,0 +1,94 @@
+import { ActionMessageType } from '@layerswap/widget-types';
+import { FC } from "react"
+import WalletMessage, { WalletUnknownError } from "./Message"
+import { Address } from "@/lib/address/Address"
+
+const ConfirmActionMessage: FC = () => {
+    return <WalletMessage
+        status="pending"
+        header='Confirm in wallet'
+        details='Please confirm the transaction in your wallet' />
+}
+
+const TransactionInProgressMessage: FC = () => {
+    return <WalletMessage
+        status="pending"
+        header='Transaction in progress'
+        details='Waiting for your transaction to be published' />
+}
+
+const InsufficientFundsMessage: FC = () => {
+    return <WalletMessage
+        status="error"
+        header='Insufficient funds'
+        details='The balance of the connected wallet is not enough' />
+}
+
+const TransactionRejectedMessage: FC<{ isSignature?: boolean }> = ({ isSignature }) => {
+    return <WalletMessage
+        status="error"
+        header={isSignature ? 'Signing rejected' : 'Transaction rejected'}
+        details={isSignature
+            ? `You've rejected the signing request in your wallet. Click “Try again” to open the prompt again.`
+            : `You've rejected the transaction in your wallet. Click “Try again” to open the prompt again.`} />
+}
+
+const DifferentAccountsNotAllowedError: FC<{ network: string }> = ({ network }) => {
+    return <WalletMessage
+        status="error"
+        header='Action needed'
+        details={`Transfers between ${network} and other chains are only allowed within the same account. Please make sure you're using the same address on both source and destination.`} />
+}
+
+const TransactionFailedMessage: FC = () => {
+    return <WalletMessage
+        status="error"
+        header='Transaction failed'
+        details={`Transfer failed or terminated`} />
+}
+
+const TransactionExpiredMessage: FC = () => {
+    return <WalletMessage
+        status="error"
+        header='Transfer details expired'
+        details='Refresh the transfer details and try again' />
+}
+
+const WalletMismatchMessage: FC<{ address: string; network: { name: string }; details?: string }> = ({ address, network, details }) => {
+    return <WalletMessage
+        status="error"
+        header='Account mismatch'
+        details={details ?? `Select ${new Address(address, network).toShortString()} in your wallet, then try again`} />
+}
+
+const SwapErrorMessage: FC<{ message?: string }> = ({ message }) => {
+    return <WalletMessage
+        status="error"
+        header='Something went wrong'
+        details={message || `Our team is informed and is now investigating the issue. Please try again later.`} />
+}
+
+const GaslessUnavailableMessage: FC<{ message?: string }> = ({ message }) => {
+    return <WalletMessage
+        status="error"
+        header={message ? 'Gasless deposit failed' : 'Gasless transfer unavailable'}
+        details={message || `Gasless transfers aren't available for this route right now. Switch to a standard transfer to continue — you'll pay the network fee yourself.`} />
+}
+
+const UnexpectedErrorMessage: FC<{ message?: string }> = () => {
+    return <WalletUnknownError />
+}
+
+export const ActionMessages = {
+    ConfirmActionMessage,
+    TransactionInProgressMessage,
+    InsufficientFundsMessage,
+    TransactionRejectedMessage,
+    WalletMismatchMessage,
+    TransactionFailedMessage,
+    TransactionExpiredMessage,
+    SwapErrorMessage,
+    GaslessUnavailableMessage,
+    UnexpectedErrorMessage,
+    DifferentAccountsNotAllowedError
+}
